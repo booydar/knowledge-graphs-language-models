@@ -3,22 +3,23 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from pymongo import MongoClient
 
 from megatron.data.dataset_utils import get_indexed_dataset_
 
-import horovod.torch as hvd
-from dotenv import load_dotenv
+# import horovod.torch as hvd
+# from dotenv import load_dotenv
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, DistributedSampler
-import datasets
+# import datasets
 from huggingface_hub import hf_hub_download
 from sklearn.metrics import f1_score, accuracy_score
 
 from lm_experiments_tools import Trainer, TrainerArgs
+from torch.utils.data import Dataset
 
-
-load_dotenv()
+# load_dotenv()
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
@@ -32,7 +33,7 @@ logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
 # first call to torch.cuda.device_count() sets visible gpus, following calls will not change the result
 logger.info(f"CUDA DEVICE COUNT: {torch.cuda.device_count()}")
 
-hvd.init()
+# hvd.init()
 
 import transformers  # noqa: E402
 from transformers import AutoConfig, AutoTokenizer, HfArgumentParser  # noqa: E402
@@ -45,7 +46,7 @@ import lm_experiments_tools.optimizers as optimizers  # noqa: E402
 # need to upgrade to torch>1.8.1
 torch.set_num_threads(4)
 # all gpus set with CUDA_VISIBLE_DEVICES are visible to process, indexing from 0 to ...
-torch.cuda.set_device(hvd.local_rank())
+# torch.cuda.set_device(hvd.local_rank())
 
 parser = HfArgumentParser(TrainerArgs)
 parser.add_argument('--task_name', type=str, help='Scrolls task name: "gov_report", "summ_screen_fd", "qmsum", '
@@ -55,7 +56,7 @@ parser.add_argument('--validate_only', action='store_true', default=False,
 parser.add_argument('--working_dir', type=str, default='.',
                     help='working dir, should be a dir with t5-experiments repo (default: .)')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
-parser.add_argument('--show_valid_examples', type=int, default=0,
+parser.add_argument('--show_valid_examples', type=int, default=2,
                     help='how many valid examples to show during training (default: 0)')
 
 parser.add_argument('--input_seq_len', type=int, default=128, help='input sequnce length (default: 128).')
@@ -89,63 +90,63 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 
 
-def download_metric():
-    scrolls_metric_path = hf_hub_download(repo_id="datasets/tau/scrolls", filename="metrics/scrolls.py")
-    updated_scrolls_metric_path = (
-        os.path.dirname(scrolls_metric_path) + os.path.basename(scrolls_metric_path).replace(".", "_") + ".py"
-    )
-    shutil.copy(scrolls_metric_path, updated_scrolls_metric_path)
-    return updated_scrolls_metric_path
+# def download_metric():
+#     scrolls_metric_path = hf_hub_download(repo_id="datasets/tau/scrolls", filename="metrics/scrolls.py")
+#     updated_scrolls_metric_path = (
+#         os.path.dirname(scrolls_metric_path) + os.path.basename(scrolls_metric_path).replace(".", "_") + ".py"
+#     )
+#     shutil.copy(scrolls_metric_path, updated_scrolls_metric_path)
+#     return updated_scrolls_metric_path
 
 
-scrolls_metric_path = download_metric()
+# scrolls_metric_path = download_metric()
 
-task_to_metric = {
-    'gov_report': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
-    'summ_screen_fd': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
-    'qmsum': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
-    'narrative_qa': ['f1'],
-    'qasper': ['f1'],
-    'quality': ['exact_match'],
-    'contract_nli': ['exact_match']
-}
+# task_to_metric = {
+#     'gov_report': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+#     'summ_screen_fd': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+#     'qmsum': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+#     'narrative_qa': ['f1'],
+#     'qasper': ['f1'],
+#     'quality': ['exact_match'],
+#     'contract_nli': ['exact_match']
+# }
 
-tasks_with_duplicates = {'narrative_qa', 'qasper'}
+# tasks_with_duplicates = {'narrative_qa', 'qasper'}
 
+class KGLMDataset(Dataset):
+    def __init__(self, port, db, collection):
+        self.client = MongoClient('localhost', port)
+        self.db_name = db
+        self.collection_name = collection
+        self.collection = self.client[db][collection]
+        self.length = self.client[self.db_name].command("collstats", self.collection_name)['count']
 
-# https://github.com/tau-nlp/scrolls/blob/5bfb8dbaf3a0128ac8c65922096fd95a645f6ba2/baselines/src/utils/duplicates.py#L1
-# some tasks have multiple possible labels for single input, drop_duplicates_in_input will collect such labels
-def drop_duplicates_in_input(untokenized_dataset):
-    indices_to_keep = []
-    id_to_idx = {}
-    outputs = []
-    for i, (id_, output) in enumerate(zip(untokenized_dataset["id"], untokenized_dataset["output"])):
-        if id_ in id_to_idx:
-            outputs[id_to_idx[id_]].append(output)
-            continue
-        indices_to_keep.append(i)
-        id_to_idx[id_] = len(outputs)
-        outputs.append([output])
-    untokenized_dataset = untokenized_dataset.select(indices_to_keep).flatten_indices()
-    untokenized_dataset = untokenized_dataset.remove_columns("output")
-    untokenized_dataset = untokenized_dataset.add_column("outputs", outputs)
-    return untokenized_dataset
-
+    def  __getitem__(self, idx):
+        item = {}
+        doc = self.collection.find_one({'_id': idx})
+        item["input"] = doc['verbalization']
+        item["outputs"] = doc['tail']
+        return item
+        
+    def __len__(self):
+        return self.length
+    
 
 if __name__ == '__main__':
     args = parser.parse_args()
     # set current working dir
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
-    if hvd.rank() == 0:
-        logger.info(f'hvd size: {hvd.size()}')
-        logger.info(f'FP16: {args.fp16}')
+#     if hvd.rank() == 0:
+#         logger.info(f'hvd size: {hvd.size()}')
+#         logger.info(f'FP16: {args.fp16}')
 
-    if hvd.rank() == 0 and args.model_path is None:
-        logger.warning('model_path is not set: config, logs and checkpoints will not be saved.')
+#     if hvd.rank() == 0 and args.model_path is None:
+#         logger.warning('model_path is not set: config, logs and checkpoints will not be saved.')
 
     # create model path and save configuration
-    if hvd.rank() == 0 and args.model_path is not None:
+#     if hvd.rank() == 0 and args.model_path is not None:
+    if args.model_path is not None:
         model_path = Path(args.model_path)
         if not model_path.exists():
             Path(model_path).mkdir(parents=True)
@@ -182,7 +183,7 @@ if __name__ == '__main__':
                                                      **encode_plus_kwargs).input_ids
             labels[labels == tokenizer.pad_token_id] = -100
             features['labels'] = labels
-            features['id'] = [b['id'] for b in batch]
+            # features['id'] = [b['id'] for b in batch]
             if 'outputs' in batch[0]:
                 features['target_text'] = [b['outputs'] for b in batch]
             else:
@@ -219,43 +220,48 @@ if __name__ == '__main__':
                                   'encoder models only for contract_nli task')
 
     # get train dataset
-    if hvd.rank() == 0:
-        logger.info(f'preparing dataset for: {args.task_name}')
-    dataset = datasets.load_dataset('tau/scrolls', args.task_name)
-    train_dataset = dataset['train']
+#     if hvd.rank() == 0:
+    logger.info(f'preparing dataset for: {args.task_name}')
+
+    train_dataset = KGLMDataset(27017, 'KGLM', 'train')
     # shuffle train data each epoch (one loop over train_dataset)
-    train_sampler = DistributedSampler(train_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=True,
-                                       drop_last=False, seed=args.seed)
+#     train_sampler = DistributedSampler(train_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=True,
+#                                        drop_last=False, seed=args.seed)
     per_worker_batch_size = args.batch_size * args.gradient_accumulation_steps
-    global_batch_size = per_worker_batch_size * hvd.size()
+    per_worker_batch_size = args.batch_size
+#     global_batch_size = per_worker_batch_size * hvd.size()
+    global_batch_size = per_worker_batch_size
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
-    train_dataloader = DataLoader(train_dataset, batch_size=per_worker_batch_size, sampler=train_sampler,
+#     train_dataloader = DataLoader(train_dataset, batch_size=per_worker_batch_size, sampler=train_sampler,
+#                                   collate_fn=collate_fn, **kwargs)
+    train_dataloader = DataLoader(train_dataset, batch_size=per_worker_batch_size,
                                   collate_fn=collate_fn, **kwargs)
     # get validation dataset
     valid_dataloader = None
-    if hvd.rank() == 0:
-        logger.info(f'preparing validation data from: {args.task_name}')
-    valid_dataset = dataset['validation']
-    if args.task_name in tasks_with_duplicates:
-        valid_dataset = drop_duplicates_in_input(valid_dataset)
-    valid_sampler = DistributedSampler(valid_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
-    valid_dataloader = DataLoader(valid_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
+#     if hvd.rank() == 0:
+    logger.info(f'preparing validation data from: {args.task_name}')
+    valid_dataset = KGLMDataset(27017, 'KGLM', 'valid')
+
+#     valid_sampler = DistributedSampler(valid_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
+#     valid_dataloader = DataLoader(valid_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
+#                                   collate_fn=collate_fn, **kwargs)
+    valid_dataloader = DataLoader(valid_dataset, batch_size=per_worker_batch_size,
                                   collate_fn=collate_fn, **kwargs)
     if args.valid_interval is None:
         args.valid_interval = args.log_interval
 
     # define model
     model_cls = get_cls_by_name(args.model_cls)
-    if hvd.rank() == 0:
-        logger.info(f'Using model class: {model_cls}')
+#     if hvd.rank() == 0:
+    logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
         if args.model_type == 'encoder' and args.task_name == 'contract_nli':
             model_cfg.num_labels = num_labels
         model = model_cls(config=model_cfg)
     else:
-        if hvd.rank() == 0:
-            logger.info(f'Loading pretrained model: {args.from_pretrained}')
+#         if hvd.rank() == 0:
+        logger.info(f'Loading pretrained model: {args.from_pretrained}')
         if args.model_type == 'encoder-decoder':
             model = model_cls.from_pretrained(args.from_pretrained)
         elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
@@ -266,8 +272,8 @@ if __name__ == '__main__':
     if optimizer_cls is None:
         raise RuntimeError(f'{args.optimizer} was not found in optimizers, torch.optim, transformers.optimization')
 
-    if hvd.rank() == 0:
-        logger.info(f'Using optimizer class: {optimizer_cls}')
+#     if hvd.rank() == 0:
+    logger.info(f'Using optimizer class: {optimizer_cls}')
 
     # todo: group optimizer params
     if optimizer_cls in [transformers.optimization.Adafactor, optimizers.Adafactor]:
@@ -303,17 +309,21 @@ if __name__ == '__main__':
     #   - implemented currently
     # - compute metrics on batch lvl
     # - add support of HF metrics and turn off aggregation in case if metric has .add_batch method
-    scrolls_metric = datasets.load_metric(scrolls_metric_path, args.task_name, keep_in_memory=True)
+    
+#     scrolls_metric = datasets.load_metric(scrolls_metric_path, args.task_name, keep_in_memory=True)
 
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
         metrics = {}
         y, p = None, None
+
         if args.model_type == 'encoder-decoder' and 'generation_outputs' in data:
             # replace -100 with pad token in labels
             y = data['labels']
+            print('!', data['generation_outputs'].shape)
             p = tokenizer.batch_decode(data['generation_outputs'], skip_special_tokens=True)
-            if hvd.rank() == 0 and args.show_valid_examples > 0:
+#             if hvd.rank() == 0 and args.show_valid_examples > 0:
+            if args.show_valid_examples > 0:
                 for i in range(min(args.show_valid_examples, len(y))):
                     logger.info(f'y: {y[i]}')
                     logger.info(f'p: {p[i]}')
@@ -324,18 +334,20 @@ if __name__ == '__main__':
             y, p = data['labels'], data['predictions']
 
         if y is not None and p is not None:
-            if args.model_type == 'encoder-decoder':
-                if not isinstance(y[0], list):
-                    y = [[_y] for _y in y]
-                result = scrolls_metric.compute(predictions=p, references=y)
-                for metric_name in task_to_metric[args.task_name]:
-                    metrics[metric_name] = result[metric_name]
-            elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
-                metrics['exact_match'] = accuracy_score(y, p) * 100
-                metrics['f1_micro'] = f1_score(y, p, average='micro')
+#             if args.model_type == 'encoder-decoder':
+#                 if not isinstance(y[0], list):
+#                     y = [[_y] for _y in y]
+#                 result = scrolls_metric.compute(predictions=p, references=y)
+#                 for metric_name in task_to_metric[args.task_name]:
+#                     metrics[metric_name] = result[metric_name]
+#             elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
+            print(y, p)
+            metrics['exact_match'] = accuracy_score(y, p) * 100
+#             metrics['f1_micro'] = f1_score(y, p, average='micro')
+
         return metrics
 
-    trainer = Trainer(args, model, optimizer, train_dataloader, valid_dataloader, train_sampler,
+    trainer = Trainer(args, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
                       generate_kwargs=generate_kwargs if args.use_generate_on_valid else {})
 
@@ -343,23 +355,23 @@ if __name__ == '__main__':
         # train loop
         trainer.train()
         # make sure all workers are done
-        hvd.barrier()
+#         hvd.barrier()
         # run validation after training
         if args.save_best:
             best_model_path = str(Path(args.model_path) / 'model_best.pth')
-            if hvd.rank() == 0:
-                logger.info(f'Loading best saved model from {best_model_path}')
+#             if hvd.rank() == 0:
+            logger.info(f'Loading best saved model from {best_model_path}')
             trainer.load(best_model_path)
         if valid_dataloader is not None:
-            if hvd.rank() == 0:
-                logger.info('Runnning validation on valid data:')
+#             if hvd.rank() == 0:
+            logger.info('Runnning validation on valid data:')
             trainer.validate(valid_dataloader, write_tb=False)
     else:
         # run validation, do not write to tensorboard
-        if hvd.rank() == 0:
-            logger.info('Running validation on train set:')
+#         if hvd.rank() == 0:
+        logger.info('Running validation on train set:')
         trainer.validate(train_dataloader, split='train', write_tb=False)
         if valid_dataloader is not None:
-            if hvd.rank() == 0:
-                logger.info('Running validation on valid data:')
+#             if hvd.rank() == 0:
+            logger.info('Running validation on valid data:')
             trainer.validate(valid_dataloader, write_tb=False)

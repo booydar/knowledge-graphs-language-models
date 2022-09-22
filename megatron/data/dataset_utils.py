@@ -34,7 +34,7 @@ from megatron import (
 from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
 
-import horovod.torch as hvd
+# import horovod.torch as hvd
 
 DSET_TYPE_BERT = 'standard_bert'
 DSET_TYPE_ICT = 'ict'
