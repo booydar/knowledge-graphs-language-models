@@ -56,7 +56,7 @@ parser.add_argument('--validate_only', action='store_true', default=False,
 parser.add_argument('--working_dir', type=str, default='.',
                     help='working dir, should be a dir with t5-experiments repo (default: .)')
 parser.add_argument('--seed', type=int, default=42, help='random seed')
-parser.add_argument('--show_valid_examples', type=int, default=2,
+parser.add_argument('--show_valid_examples', type=int, default=10,
                     help='how many valid examples to show during training (default: 0)')
 
 parser.add_argument('--input_seq_len', type=int, default=128, help='input sequnce length (default: 128).')
@@ -123,9 +123,9 @@ class KGLMDataset(Dataset):
 
     def  __getitem__(self, idx):
         item = {}
-        doc = self.collection.find_one({'_id': idx})
+        doc = self.collection.find_one({'_id': str(idx)})
         item["input"] = doc['verbalization']
-        item["outputs"] = doc['tail']
+        item["outputs"] = doc['target']
         return item
         
     def __len__(self):
@@ -135,6 +135,7 @@ class KGLMDataset(Dataset):
 if __name__ == '__main__':
     args = parser.parse_args()
     # set current working dir
+    args.save_best = True
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
 #     if hvd.rank() == 0:
@@ -156,8 +157,10 @@ if __name__ == '__main__':
 
     if not args.from_pretrained:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+        num_added_toks = tokenizer.add_tokens(['[SEP]'], special_tokens=True)
     else:
         tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
+        num_added_toks = tokenizer.add_tokens(['[SEP]'], special_tokens=True)
 
     if args.model_type == 'encoder-decoder':
         global_attention_first_token = False  # should be True for LED
@@ -171,7 +174,8 @@ if __name__ == '__main__':
             if 'outputs' in batch[0]:
                 # if we have more than 1 label per example (only in valid) take only one of them
                 # to compute loss on valid
-                labels = [b['outputs'][0][:args.target_seq_len * 10] for b in batch]
+#                 labels = [b['outputs'][0][:args.target_seq_len * 10] for b in batch]
+                labels = [b['outputs'][:args.target_seq_len * 10] for b in batch]
             else:
                 labels = [b['output'][:args.target_seq_len * 10] for b in batch]
             if args.input_prefix:
@@ -267,6 +271,7 @@ if __name__ == '__main__':
         elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
             model = model_cls.from_pretrained(args.from_pretrained, num_labels=num_labels)
 
+    model.resize_token_embeddings(len(tokenizer))
     # define optimizer
     optimizer_cls = get_optimizer(args.optimizer)
     if optimizer_cls is None:
@@ -285,6 +290,9 @@ if __name__ == '__main__':
                                   weight_decay=args.weight_decay)
     else:
         optimizer = optimizer_cls(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        
+    args.lr_scheduler = "constant"
+    args.use_lr_drop = False
 
     # for encoder only classification
     def keep_for_metrics_fn(batch, output):
@@ -320,7 +328,7 @@ if __name__ == '__main__':
         if args.model_type == 'encoder-decoder' and 'generation_outputs' in data:
             # replace -100 with pad token in labels
             y = data['labels']
-            print('!', data['generation_outputs'].shape)
+
             p = tokenizer.batch_decode(data['generation_outputs'], skip_special_tokens=True)
 #             if hvd.rank() == 0 and args.show_valid_examples > 0:
             if args.show_valid_examples > 0:
@@ -329,6 +337,10 @@ if __name__ == '__main__':
                     logger.info(f'p: {p[i]}')
                     logger.info(f'p ids: {data["generation_outputs"][i]}')
                     logger.info('-' * 50)
+                    with open('logs.txt', 'a') as f:
+                        print(metrics)
+                        f.write(f'y: "{y[i]}"'+ ' ' + f'p: "{p[i]}"')
+                        f.write("\n") 
             # todo: do we need to better clean P to remove tokens after eos? not remove special tokens only
         elif args.model_type == 'encoder':
             y, p = data['labels'], data['predictions']
@@ -341,7 +353,6 @@ if __name__ == '__main__':
 #                 for metric_name in task_to_metric[args.task_name]:
 #                     metrics[metric_name] = result[metric_name]
 #             elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
-            print(y, p)
             metrics['exact_match'] = accuracy_score(y, p) * 100
 #             metrics['f1_micro'] = f1_score(y, p, average='micro')
 

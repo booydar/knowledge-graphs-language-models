@@ -475,19 +475,19 @@ class Trainer:
 #                 metrics_data[k] = list(itertools.chain.from_iterable(hvd.allgather_object(self.metrics_data[split][k])))
                 metrics_data[k] = self.metrics_data[split][k]
     
-#                 m_shape = getattr(metrics_data[k], 'shape', None)
-#                 if m_shape is None:
-#                     # data is not a tensor, collect it into python list
-#                     metrics_data[k] = list(itertools.chain.from_iterable(metrics_data[k]))
-#                 elif len(m_shape) == 0:
-#                     # if scalars
-#                     metrics_data[k] = torch.stack(metrics_data[k])
-#                 elif all(m_shape[1:] == t.shape[1:] for t in metrics_data[k]):
-#                     # concat tensors if all shapes are equal except the first
-#                     metrics_data[k] = torch.cat(metrics_data[k])
-#                 else:
-#                     # can't concat tensors with diff last shapes, so collecting them into python list
-#                     metrics_data[k] = list(itertools.chain.from_iterable([t.tolist() for t in metrics_data[k]]))
+                m_shape = getattr(metrics_data[k], 'shape', None)
+                if m_shape is None:
+                    # data is not a tensor, collect it into python list
+                    metrics_data[k] = list(itertools.chain.from_iterable(metrics_data[k]))
+                elif len(m_shape) == 0:
+                    # if scalars
+                    metrics_data[k] = torch.stack(metrics_data[k])
+                elif all(m_shape[1:] == t.shape[1:] for t in metrics_data[k]):
+                    # concat tensors if all shapes are equal except the first
+                    metrics_data[k] = torch.cat(metrics_data[k])
+                else:
+                    # can't concat tensors with diff last shapes, so collecting them into python list
+                    metrics_data[k] = list(itertools.chain.from_iterable([t.tolist() for t in metrics_data[k]]))
             m = self.metrics_fn(metrics_data)
             if len(metrics.keys() & m.keys()) != 0:
                 self._log_warning(f'metrics ({m.keys()}) and batch-lvl metrics ({metrics.keys()}) have common names. '
@@ -495,7 +495,6 @@ class Trainer:
             metrics.update(m)
         self._reset_batch_metrics(split)
         self._reset_metrics_data(split)
-        print(metrics)
         return metrics
 
     def train(self) -> None:
@@ -586,6 +585,7 @@ class Trainer:
 
 #             if hvd.rank() == 0:
             pbar.update(1)
+                
             pbar.set_postfix({'train_loss': f'{train_loss:.3f}',
                               'valid_loss': f'{valid_loss:.3f}',
                               f'best_valid_{self.args.optimize_metric}': f'{best_valid_metric:.3f}'
@@ -598,9 +598,11 @@ class Trainer:
 
 #         if hvd.rank() == 0:
             # todo: run validation, call save model?
+
         pbar.close()
         self._log_info('Done!')
 
+            
     def validate(self, dataloader, split='valid', write_tb=True) -> Dict[str, float]:
         self._log_info(f'start validation at step {self.n_iter}')
 
@@ -621,6 +623,9 @@ class Trainer:
             if self.tb and write_tb:
                 self.tb.add_scalar(f'{k}/iterations/{split}', metrics[k], self.n_iter)
                 self.tb.add_scalar(f'{k}/samples/{split}', metrics[k], self.n_iter * self.global_batch_size)
+        with open("logs.txt", 'a') as f:
+            f.write(str(metrics))
+            f.write("\n\n")
         return metrics
 
     def load(self, load_path, reset_optimizer=False, reset_lr=False, reset_iteration=False) -> None:
