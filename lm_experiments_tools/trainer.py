@@ -14,10 +14,10 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers.optimization import get_scheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
-# import horovod.torch as hvd
+import horovod.torch as hvd
 
 from lm_experiments_tools.utils import rank_0
-
+import horovod.torch as hvd
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
@@ -184,8 +184,7 @@ class Trainer:
         self.args = args
 
         self.per_worker_batch_size = self.args.batch_size * self.args.gradient_accumulation_steps
-#         self.global_batch_size = self.per_worker_batch_size * hvd.size()
-        self.global_batch_size = self.per_worker_batch_size
+        self.global_batch_size = self.per_worker_batch_size * hvd.size()
 
         self.model_forward_args = set(inspect.getfullargspec(self.model.forward).args)
 
@@ -208,27 +207,26 @@ class Trainer:
 
         self.tb = None
         # write tensorboard logs only from rank 0 and if model_path is specified
-#         if hvd.rank() == 0 and self.args.model_path is not None:
-        if self.args.model_path is not None:
+        if hvd.rank() == 0 and self.args.model_path is not None:
             self.tb = SummaryWriter(log_dir=self.args.model_path)
 
         # move model to gpu
         self.model.cuda()
 
         # Horovod: broadcast parameters & optimizer state.
-#         hvd.broadcast_parameters(self.model.state_dict(), root_rank=0)
-#         hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
+        hvd.broadcast_parameters(self.model.state_dict(), root_rank=0)
+        hvd.broadcast_optimizer_state(self.optimizer, root_rank=0)
 
         # Horovod: (optional) compression algorithm.
-#         compression = hvd.Compression.fp16 if self.args.fp16_allreduce else hvd.Compression.none
+        compression = hvd.Compression.fp16 if self.args.fp16_allreduce else hvd.Compression.none
         # Horovod: wrap optimizer with DistributedOptimizer.
-#         self.optimizer = hvd.DistributedOptimizer(self.optimizer,
-#                                                   named_parameters=self.model.named_parameters(),
-#                                                   compression=compression,
-#                                                   op=hvd.Average,
-#                                                   gradient_predivide_factor=1.0,
-#                                                   backward_passes_per_step=self.args.gradient_accumulation_steps,
-#                                                   )
+        self.optimizer = hvd.DistributedOptimizer(self.optimizer,
+                                                  named_parameters=self.model.named_parameters(),
+                                                  compression=compression,
+                                                  op=hvd.Average,
+                                                  gradient_predivide_factor=1.0,
+                                                  backward_passes_per_step=self.args.gradient_accumulation_steps,
+                                                  )
 
         if args.lr_scheduler:
             if args.lr is None:
@@ -264,14 +262,10 @@ class Trainer:
                 self.amp = importlib.import_module('apex.amp')
             except ImportError:
                 raise ImportError('Install NVIDIA APEX to use fp16 training! Check README.md for instructions.')
-#             self.model, self.optimizer = self.amp.initialize(self.model, self.optimizer,
-#                                                              enabled=self.args.fp16, opt_level=self.args.apex_opt_lvl,
-#                                                              min_loss_scale=self.args.min_loss_scale,
-#                                                              verbosity=int(hvd.rank() == 0))
             self.model, self.optimizer = self.amp.initialize(self.model, self.optimizer,
                                                              enabled=self.args.fp16, opt_level=self.args.apex_opt_lvl,
                                                              min_loss_scale=self.args.min_loss_scale,
-                                                             verbosity=True)
+                                                             verbosity=int(hvd.rank() == 0))
 
         self.n_iter = 0
         self.n_epoch = 0
@@ -314,7 +308,7 @@ class Trainer:
                 # filter items from batch that are not used by model forward
                 outputs = self.model(**{k: subbatch[k] for k in subbatch if k in self.model_forward_args})
                 loss = outputs['loss']
-                
+
                 if not is_train_mode and self.args.use_generate_on_valid:
                     generate_kwargs = deepcopy(self.generate_kwargs)
                     if 'max_length' not in generate_kwargs and 'labels' in subbatch:
@@ -397,8 +391,7 @@ class Trainer:
         # todo: save number of seen samples in checkpoint
         self._log_info(f'Skipping {n} batches from the dataset from epoch {self.n_epoch}...')
         # skipping...
-#         for _ in tqdm(itertools.islice(train_batches, n), disable=(hvd.rank() != 0), desc='Skipping...', total=n):
-        for _ in tqdm(itertools.islice(train_batches, n), disable=False, desc='Skipping...', total=n):
+        for _ in tqdm(itertools.islice(train_batches, n), disable=(hvd.rank() != 0), desc='Skipping...', total=n):
             ...
 
     def _add_batch_metrics(self, batch_metrics: Dict[str, Union[float, torch.Tensor]], split: str):
@@ -461,33 +454,27 @@ class Trainer:
 
         # batch-lvl metrics
         metrics = {}
-
         for k in self.batch_metrics[split]:
-            
-#             metrics[k] = list(itertools.chain.from_iterable(self.batch_metrics[split][k]))
-#             metrics[k] = np.mean(metrics[k])
-             metrics[k] = self.batch_metrics[split][k]
-             metrics[k] = np.mean(metrics[k])
+            metrics[k] = list(itertools.chain.from_iterable(hvd.allgather_object(self.batch_metrics[split][k])))
+            metrics[k] = np.mean(metrics[k])
         # compute metrics from metrics data
         if self.keep_for_metrics_fn and self.metrics_fn:
             metrics_data = {}
             for k in self.metrics_data[split]:
-#                 metrics_data[k] = list(itertools.chain.from_iterable(hvd.allgather_object(self.metrics_data[split][k])))
-                metrics_data[k] = self.metrics_data[split][k]
-    
-#                 m_shape = getattr(metrics_data[k], 'shape', None)
-#                 if m_shape is None:
-#                     # data is not a tensor, collect it into python list
-#                     metrics_data[k] = list(itertools.chain.from_iterable(metrics_data[k]))
-#                 elif len(m_shape) == 0:
-#                     # if scalars
-#                     metrics_data[k] = torch.stack(metrics_data[k])
-#                 elif all(m_shape[1:] == t.shape[1:] for t in metrics_data[k]):
-#                     # concat tensors if all shapes are equal except the first
-#                     metrics_data[k] = torch.cat(metrics_data[k])
-#                 else:
-#                     # can't concat tensors with diff last shapes, so collecting them into python list
-#                     metrics_data[k] = list(itertools.chain.from_iterable([t.tolist() for t in metrics_data[k]]))
+                metrics_data[k] = list(itertools.chain.from_iterable(hvd.allgather_object(self.metrics_data[split][k])))
+                m_shape = getattr(metrics_data[k][0], 'shape', None)
+                if m_shape is None:
+                    # data is not a tensor, collect it into python list
+                    metrics_data[k] = list(itertools.chain.from_iterable(metrics_data[k]))
+                elif len(m_shape) == 0:
+                    # if scalars
+                    metrics_data[k] = torch.stack(metrics_data[k])
+                elif all(m_shape[1:] == t.shape[1:] for t in metrics_data[k]):
+                    # concat tensors if all shapes are equal except the first
+                    metrics_data[k] = torch.cat(metrics_data[k])
+                else:
+                    # can't concat tensors with diff last shapes, so collecting them into python list
+                    metrics_data[k] = list(itertools.chain.from_iterable([t.tolist() for t in metrics_data[k]]))
             m = self.metrics_fn(metrics_data)
             if len(metrics.keys() & m.keys()) != 0:
                 self._log_warning(f'metrics ({m.keys()}) and batch-lvl metrics ({metrics.keys()}) have common names. '
@@ -495,14 +482,13 @@ class Trainer:
             metrics.update(m)
         self._reset_batch_metrics(split)
         self._reset_metrics_data(split)
-        print(metrics)
         return metrics
 
     def train(self) -> None:
         pbar = None
-#         if hvd.rank() == 0:
-        pbar = tqdm(total=self.args.iters, desc='Train')
-        pbar.update(self.n_iter)
+        if hvd.rank() == 0:
+            pbar = tqdm(total=self.args.iters, desc='Train')
+            pbar.update(self.n_iter)
 
         train_batches = self._train_batch_generator()
 
@@ -539,28 +525,28 @@ class Trainer:
                 train_metrics = self.collect_metrics(split='train')
                 train_loss = train_metrics['loss']
 
-#                 if hvd.rank() == 0:
-                # todo: move logging, move to self.log()
-                for k in train_metrics:
-                    self._log_info(f'step: {self.n_iter}/{self.args.iters} {k}: {train_metrics[k]:.4f}')
-                    if self.tb:
-                        self.tb.add_scalar(f'{k}/iterations/train', train_metrics[k], self.n_iter)
-                        self.tb.add_scalar(f'{k}/samples/train', train_metrics[k],
-                                           self.n_iter * self.global_batch_size)
-                # log iteration time
-                if self.tb:
-                    self.tb.add_scalar('time/iterations/per_iter', iteration_time, self.n_iter)
-                    self.tb.add_scalar('time/samples/per_iter', iteration_time,
-                                       self.n_iter * self.global_batch_size)
-                # log learning rate
-                for j, param_group in enumerate(self.optimizer.param_groups):
-                    # adafactor uses external lr to compute its own lr if scale_parameter is true
-                    # adafactor might not have external lr in case if relative_step is used
-                    for p in ['lr', 'scaled_lr']:
-                        if p in param_group and param_group[p] is not None and self.tb:
-                            self.tb.add_scalar(f'{p}/iterations/param_group_{j}', param_group[p], self.n_iter)
-                            self.tb.add_scalar(f'{p}/samples/param_group_{j}', param_group[p],
+                if hvd.rank() == 0:
+                    # todo: move logging, move to self.log()
+                    for k in train_metrics:
+                        self._log_info(f'step: {self.n_iter}/{self.args.iters} {k}: {train_metrics[k]:.4f}')
+                        if self.tb:
+                            self.tb.add_scalar(f'{k}/iterations/train', train_metrics[k], self.n_iter)
+                            self.tb.add_scalar(f'{k}/samples/train', train_metrics[k],
                                                self.n_iter * self.global_batch_size)
+                    # log iteration time
+                    if self.tb:
+                        self.tb.add_scalar('time/iterations/per_iter', iteration_time, self.n_iter)
+                        self.tb.add_scalar('time/samples/per_iter', iteration_time,
+                                           self.n_iter * self.global_batch_size)
+                    # log learning rate
+                    for j, param_group in enumerate(self.optimizer.param_groups):
+                        # adafactor uses external lr to compute its own lr if scale_parameter is true
+                        # adafactor might not have external lr in case if relative_step is used
+                        for p in ['lr', 'scaled_lr']:
+                            if p in param_group and param_group[p] is not None and self.tb:
+                                self.tb.add_scalar(f'{p}/iterations/param_group_{j}', param_group[p], self.n_iter)
+                                self.tb.add_scalar(f'{p}/samples/param_group_{j}', param_group[p],
+                                                   self.n_iter * self.global_batch_size)
 
             # validation
             if self.valid_dataloader is not None and self.n_iter % self.args.valid_interval == 0:
@@ -584,21 +570,21 @@ class Trainer:
             if self.args.save_interval and self.n_iter % self.args.save_interval == 0:
                 self.save(self.args.model_path)
 
-#             if hvd.rank() == 0:
-            pbar.update(1)
-            pbar.set_postfix({'train_loss': f'{train_loss:.3f}',
-                              'valid_loss': f'{valid_loss:.3f}',
-                              f'best_valid_{self.args.optimize_metric}': f'{best_valid_metric:.3f}'
-                              })
+            if hvd.rank() == 0:
+                pbar.update(1)
+                pbar.set_postfix({'train_loss': f'{train_loss:.3f}',
+                                  'valid_loss': f'{valid_loss:.3f}',
+                                  f'best_valid_{self.args.optimize_metric}': f'{best_valid_metric:.3f}'
+                                  })
 
             if self.args.early_stopping_patience is not None and \
                     self.early_stopping_counter > self.args.early_stopping_patience:
                 self._log_info('Early stopping triggered: stopping training...')
                 break
 
-#         if hvd.rank() == 0:
+        if hvd.rank() == 0:
             # todo: run validation, call save model?
-        pbar.close()
+            pbar.close()
         self._log_info('Done!')
 
     def validate(self, dataloader, split='valid', write_tb=True) -> Dict[str, float]:
@@ -606,21 +592,20 @@ class Trainer:
 
         self._reset_batch_metrics('valid')
         self._reset_metrics_data('valid')
-#         for batch in tqdm(dataloader, desc='Validation', disable=(hvd.rank() != 0)):
-        for batch in tqdm(dataloader, desc='Validation', disable=False):
+        for batch in tqdm(dataloader, desc='Validation', disable=(hvd.rank() != 0)):
             batch_metrics, batch_metrics_data = self.step(batch, is_train_mode=False)
             self._add_batch_metrics(batch_metrics, split='valid')
             if self.keep_for_metrics_fn and self.metrics_fn:
                 self._add_metrics_data(batch_metrics_data, split='valid')
 
         metrics = self.collect_metrics(split='valid')
-#         if hvd.rank() == 0:
+        if hvd.rank() == 0:
             # todo: separate logging from validation/training
-        for k in metrics:
-            self._log_info(f'Validation on {split} {k}: {metrics[k]:.4f}')
-            if self.tb and write_tb:
-                self.tb.add_scalar(f'{k}/iterations/{split}', metrics[k], self.n_iter)
-                self.tb.add_scalar(f'{k}/samples/{split}', metrics[k], self.n_iter * self.global_batch_size)
+            for k in metrics:
+                self._log_info(f'Validation on {split} {k}: {metrics[k]:.4f}')
+                if self.tb and write_tb:
+                    self.tb.add_scalar(f'{k}/iterations/{split}', metrics[k], self.n_iter)
+                    self.tb.add_scalar(f'{k}/samples/{split}', metrics[k], self.n_iter * self.global_batch_size)
         return metrics
 
     def load(self, load_path, reset_optimizer=False, reset_lr=False, reset_iteration=False) -> None:
