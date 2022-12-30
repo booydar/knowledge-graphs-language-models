@@ -18,6 +18,7 @@ from sklearn.metrics import f1_score, accuracy_score
 
 from lm_experiments_tools import Trainer, TrainerArgs
 from torch.utils.data import Dataset
+import datasets
 
 load_dotenv()
 
@@ -70,6 +71,9 @@ parser.add_argument('--data_n_workers', type=int, default=2, help='number of dat
 parser.add_argument('--input_prefix', type=str, default='', help='add task prefix to an input string (default: "")')
 parser.add_argument('--drop_neighborhood', action='store_true', default=False, 
                     help='not to include neighborhood in model input')
+parser.add_argument('--drop_description', action='store_true', default=False, 
+                    help='not to learn to predict entity description')
+
 
 # model args
 parser.add_argument('--from_pretrained', type=str, help='model name in HF Model Hub (default: "")')
@@ -99,10 +103,12 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
 
 
 class KGLMLocalDataset(Dataset):
-    def __init__(self, path, neighborhood=True, sep='[SEP]'):
+    def __init__(self, path, neighborhood=True, description=True, sep='[SEP]', sep2='[SEP-2]'):
         self.df = pd.read_csv(path)
         self.neighborhood = neighborhood
+        self.description = description
         self.sep = sep
+        self.sep2 = sep2
 
     def  __getitem__(self, idx):
         item = {}
@@ -110,7 +116,11 @@ class KGLMLocalDataset(Dataset):
         item["input"] = triplet.verbalization
         if not self.neighborhood:
             item["input"] = self.drop_neighborhood(item["input"])
+        
         item["outputs"] = triplet['verbalized_tail']
+        if not self.description:
+            item["outputs"] = self.drop_description(item["outputs"])
+            
         return item
         
     def __len__(self):
@@ -119,6 +129,10 @@ class KGLMLocalDataset(Dataset):
     
     def drop_neighborhood(self, text):
         return self.sep.join(text.split(self.sep)[:2]) + self.sep
+    
+    
+    def drop_description(self, text):
+        return text.split(self.sep2)[0].strip()
     
 
 if __name__ == '__main__':
@@ -220,7 +234,7 @@ if __name__ == '__main__':
     if hvd.rank() == 0:
         logger.info(f'preparing dataset for: {args.task_name}')
 
-    train_dataset = KGLMLocalDataset(args.train_path, neighborhood=not args.drop_neighborhood)
+    train_dataset = KGLMLocalDataset(args.train_path, neighborhood=not args.drop_neighborhood, description=not args.drop_description)
     # shuffle train data each epoch (one loop over train_dataset)
     train_sampler = DistributedSampler(train_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=True,
                                        drop_last=False, seed=args.seed)
@@ -236,7 +250,7 @@ if __name__ == '__main__':
     valid_dataloader = None
     if hvd.rank() == 0:
         logger.info(f'preparing validation data from: {args.task_name}')
-    valid_dataset = KGLMLocalDataset(args.valid_path, neighborhood=not args.drop_neighborhood)
+    valid_dataset = KGLMLocalDataset(args.valid_path, neighborhood=not args.drop_neighborhood, description=not args.drop_description)
 
     valid_sampler = DistributedSampler(valid_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
     valid_dataloader = DataLoader(valid_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
@@ -246,7 +260,7 @@ if __name__ == '__main__':
     # print('\n\n\nTrain sample: ', next(gen))
     # print('\nDataset sample: ', train_dataset[10])
     # raise(ValueError)
-    test_dataset = KGLMLocalDataset(args.test_path, neighborhood=not args.drop_neighborhood)
+    test_dataset = KGLMLocalDataset(args.test_path, neighborhood=not args.drop_neighborhood, description=not args.drop_description)
     test_sampler = DistributedSampler(test_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
     test_dataloader = DataLoader(test_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
                                   collate_fn=collate_fn, **kwargs)
@@ -271,11 +285,11 @@ if __name__ == '__main__':
         elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
             model = model_cls.from_pretrained(args.from_pretrained, num_labels=num_labels)
 
-    # ## load cpt
-    # if args.cpt_path:
-    #     model_cpt = os.path.join(args.cpt_path, "model_best.pth")
-    #     cpt = torch.load(model_cpt)
-    #     # model.load_state_dict(cpt[
+    ## load cpt
+    if args.cpt_path:
+        model_cpt = os.path.join(args.cpt_path, "model_best.pth")
+        cpt = torch.load(model_cpt)
+        model.load_state_dict(cpt['model_state_dict'])
     
     # define optimizer
     optimizer_cls = get_optimizer(args.optimizer)
@@ -309,6 +323,7 @@ if __name__ == '__main__':
         return data
 
 
+    # sacrebleu = datasets.load_metric('sacrebleu')
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
         metrics = {}
@@ -334,17 +349,12 @@ if __name__ == '__main__':
             y, p = data['labels'], data['predictions']
 
         if y is not None and p is not None:
-            # if args.model_type == 'encoder-decoder':
-            #     if not isinstance(y[0], list):
-            #         y = [[_y] for _y in y]
-            #     result = scrolls_metric.compute(predictions=p, references=y)
-            #     for metric_name in task_to_metric[args.task_name]:
-            #         metrics[metric_name] = result[metric_name]
-            # elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
             metrics['exact_match'] = accuracy_score(y, p) * 100
             metrics['exact_match_entity'] = accuracy_score(y_entity, p_entity) * 100
-            metrics['f1_micro'] = f1_score(y, p, average='micro')
-            metrics['f1_micro_entity'] = f1_score(y_entity, p_entity, average='micro')
+
+            y_tokens = tokenizer.batch_encode_plus(y, max_length=args.target_seq_len,
+                                                     **encode_plus_kwargs)['input_ids']
+            p_tokens = data['generation_outputs']
 
         return metrics
 
@@ -367,11 +377,15 @@ if __name__ == '__main__':
             if hvd.rank() == 0:
                 logger.info('Runnning validation on valid data:')
             trainer.validate(valid_dataloader, write_tb=False)
+        if test_dataloader is not None:
+            if hvd.rank() == 0:
+                logger.info('Runnning validation on test data:')
+            trainer.validate(test_dataloader, split='test', write_tb=True)
     else:
         # run validation, do not write to tensorboard
-        if hvd.rank() == 0:
-            logger.info('Running validation on train set:')
-        trainer.validate(train_dataloader, split='train', write_tb=False)
+        # if hvd.rank() == 0:
+        #     logger.info('Running validation on train set:')
+        # trainer.validate(train_dataloader, split='train', write_tb=False)
         if valid_dataloader is not None:
             if hvd.rank() == 0:
                 logger.info('Running validation on valid data:')
@@ -380,4 +394,4 @@ if __name__ == '__main__':
         if test_dataloader is not None:
             if hvd.rank() == 0:
                 logger.info('Running validation on test data:')
-            trainer.validate(test_dataloader, write_tb=False)
+            trainer.validate(test_dataloader, split='test', write_tb=True)
