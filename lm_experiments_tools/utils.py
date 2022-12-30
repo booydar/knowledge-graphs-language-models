@@ -4,7 +4,7 @@ import platform
 import subprocess
 import functools
 
-# import horovod.torch as hvd
+import horovod.torch as hvd
 import torch
 import transformers
 import lm_experiments_tools.optimizers
@@ -47,9 +47,9 @@ def collect_run_configuration(args, env_vars=['CUDA_VISIBLE_DEVICES']):
     args_dict['ENV'] = {}
     for env_var in env_vars:
         args_dict['ENV'][env_var] = os.environ.get(env_var, '')
-#     args_dict['HVD_INIT'] = hvd.is_initialized()
-#     if hvd.is_initialized():
-#         args_dict['HVD_SIZE'] = hvd.size()
+    args_dict['HVD_INIT'] = hvd.is_initialized()
+    if hvd.is_initialized():
+        args_dict['HVD_SIZE'] = hvd.size()
     args_dict['MACHINE'] = platform.node()
     args_dict['COMMIT'] = get_git_hash_commit()
     return args_dict
@@ -58,8 +58,8 @@ def collect_run_configuration(args, env_vars=['CUDA_VISIBLE_DEVICES']):
 def get_distributed_rank():
     if torch.distributed.is_initialized():
         return torch.distributed.get_rank()
-#     if hvd.is_initialized():
-#         return hvd.rank()
+    if hvd.is_initialized():
+        return hvd.rank()
     return 0
 
 
