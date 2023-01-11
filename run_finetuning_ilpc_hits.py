@@ -360,7 +360,7 @@ if __name__ == '__main__':
             metrics['exact_match'] = accuracy_score(y, p) * 100
             metrics['exact_match_entity'] = accuracy_score(y_entity, p_entity) * 100
 
-            hits = hits_calculator.hits(p, data['output_id'])
+            hits = hits_calculator.hits(p, data['output_id'], p_entity, y_entity)
             if hvd.rank() == 0:
                 logger.info(f'hits: {hits}')
             for key in hits:

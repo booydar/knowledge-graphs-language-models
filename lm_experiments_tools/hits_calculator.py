@@ -14,7 +14,7 @@ class HitsCalculator:
             self.index=faiss.read_index("faiss/entities+desc.index")
             
 
-    def hits(self, outputs, labels, tokens_to_replace=(" [SEP-2]", " [SEP-3]")):
+    def hits(self, outputs, labels, p_entity, y_entity, tokens_to_replace=(" [SEP-2]", " [SEP-3]")):
         for token in tokens_to_replace:
             outputs = list(map(lambda x: x.replace(token, ""), outputs))
 
@@ -26,7 +26,13 @@ class HitsCalculator:
         for i, label in enumerate(labels):
             target = int(label[1:]) 
 
-            if target == indices[i][0]:
+            if p_entity[i] == y_entity[i]:
+                hits['Hits@1'] += 1
+                hits['Hits@3'] += 1
+                hits['Hits@5'] += 1
+                hits['Hits@10'] += 1
+
+            elif target == indices[i][0]:
                 hits['Hits@1'] += 1
                 hits['Hits@3'] += 1
                 hits['Hits@5'] += 1
