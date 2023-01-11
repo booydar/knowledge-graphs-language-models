@@ -6,12 +6,9 @@ import time
 
 
 class HitsCalculator:
-    def __init__(self, emb_model=SentenceTransformer('all-MiniLM-L6-v2'), drop_description=False):
-        self.emb_model = emb_model
-        if drop_description:
-            self.index=faiss.read_index("faiss/entities.index")
-        else:
-            self.index=faiss.read_index("faiss/entities+desc.index")
+    def __init__(self, emb_model='all-MiniLM-L6-v2', index_path="faiss/entities.index", drop_description=False):
+        self.emb_model = SentenceTransformer(emb_model)
+        self.index=faiss.read_index(index_path)
             
 
     def hits(self, outputs, labels, tokens_to_replace=(" [SEP-2]", " [SEP-3]")):
