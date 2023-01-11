@@ -76,6 +76,9 @@ parser.add_argument('--drop_neighborhood', action='store_true', default=False,
 parser.add_argument('--drop_description', action='store_true', default=False, 
                     help='not to learn to predict entity description')
 
+parser.add_argument('--index_path', default=None, type=str, 
+                    help='path to index for hits metric')
+
 
 # model args
 parser.add_argument('--from_pretrained', type=str, help='model name in HF Model Hub (default: "")')
@@ -331,7 +334,7 @@ if __name__ == '__main__':
         return data
 
 
-    hits_calculator = HitsCalculator(drop_description=args.drop_description)
+    hits_calculator = HitsCalculator(drop_description=args.drop_description, index_path=args.index_path)
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
         metrics = {}
