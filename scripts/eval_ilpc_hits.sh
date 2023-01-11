@@ -15,8 +15,8 @@ TGT_LEN=512
 METRIC=exact_match
 SCHEDULER=linear
 ITERS=250000
-TBS=128
-BS=128
+TBS=8
+BS=8
 MODEL_CFG="t5-base"
 
 for SRC_LEN in 512
