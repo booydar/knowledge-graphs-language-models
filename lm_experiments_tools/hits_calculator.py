@@ -6,10 +6,13 @@ import time
 
 
 class HitsCalculator:
-    def __init__(self, emb_model='all-MiniLM-L6-v2', index_path="faiss/entities.index", drop_description=False):
+    def __init__(self, emb_model='all-MiniLM-L6-v2', index_path="faiss/entities.index", 
+    entities_path='faiss/large_verbalized_inference_entities.json', drop_description=False):
         self.emb_model = SentenceTransformer(emb_model)
         self.index=faiss.read_index(index_path)
-            
+        
+        with open(entities_path, 'r') as f:
+            self.entities = json.load(f)
 
     def hits(self, outputs, labels, p_entity, y_entity, tokens_to_replace=(" [SEP-2]", " [SEP-3]")):
         for token in tokens_to_replace:
@@ -23,11 +26,12 @@ class HitsCalculator:
         for i, label in enumerate(labels):
             target = int(label[1:]) 
 
-            if p_entity[i] == y_entity[i]:
-                hits['Hits@1'] += 1
-                hits['Hits@3'] += 1
-                hits['Hits@5'] += 1
-                hits['Hits@10'] += 1
+            if p_entity[i] in self.entities:
+                if p_entity[i] == y_entity[i]:
+                    hits['Hits@1'] += 1
+                    hits['Hits@3'] += 1
+                    hits['Hits@5'] += 1
+                    hits['Hits@10'] += 1
 
             elif target == indices[i][0]:
                 hits['Hits@1'] += 1
