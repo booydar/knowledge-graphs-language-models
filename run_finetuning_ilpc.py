@@ -262,7 +262,7 @@ if __name__ == '__main__':
     # raise(ValueError)
     test_dataset = KGLMLocalDataset(args.test_path, neighborhood=not args.drop_neighborhood, description=not args.drop_description)
     test_sampler = DistributedSampler(test_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
+    test_dataloader = DataLoader(test_dataset, batch_size=per_worker_batch_size, sampler=test_sampler,
                                   collate_fn=collate_fn, **kwargs)
     
     if args.valid_interval is None:
