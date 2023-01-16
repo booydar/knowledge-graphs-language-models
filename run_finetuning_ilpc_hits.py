@@ -79,6 +79,9 @@ parser.add_argument('--drop_description', action='store_true', default=False,
 parser.add_argument('--index_path', default=None, type=str, 
                     help='path to index for hits metric')
 
+parser.add_argument('--inference_entities_path', default=None, type=str, 
+                    help='path to names of verbalized entities from inference graph')
+
 
 # model args
 parser.add_argument('--from_pretrained', type=str, help='model name in HF Model Hub (default: "")')
@@ -334,7 +337,8 @@ if __name__ == '__main__':
         return data
 
 
-    hits_calculator = HitsCalculator(drop_description=args.drop_description, index_path=args.index_path)
+    hits_calculator = HitsCalculator(drop_description=args.drop_description, index_path=args.index_path, 
+        entities_path=args.inference_entities_path)
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
         metrics = {}
@@ -363,7 +367,7 @@ if __name__ == '__main__':
             metrics['exact_match'] = accuracy_score(y, p) * 100
             metrics['exact_match_entity'] = accuracy_score(y_entity, p_entity) * 100
 
-            hits = hits_calculator.hits(p, data['output_id'])
+            hits = hits_calculator.hits(p, data['output_id'], p_entity, y_entity)
             if hvd.rank() == 0:
                 logger.info(f'hits: {hits}')
             for key in hits:

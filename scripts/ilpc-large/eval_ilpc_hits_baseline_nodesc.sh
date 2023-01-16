@@ -35,6 +35,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --model_path ./runs/test/t5-base/ilpc-large/lr5e-06_constant_with_warmup_adamw_wd1e-02_512-512_bs128_iters150000_baseline_pretrained_2sep_enum_nodesc_eval/run_1  \
         --cpt_path ./runs/t5-base/ilpc-large/lr5e-06_constant_with_warmup_adamw_wd1e-02_512-512_bs128_iters150000_baseline_pretrained_2sep_enum_nodesc/run_1 \
         --index_path /home/bulatov/bulatov/KGLM/faiss/entities.index \
+        --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/large_verbalized_inference_entities.json \
         --from_pretrained $MODEL_CFG \
         --tokenizer $MODEL_NAME \
         --model_type $MODEL_TYPE \
