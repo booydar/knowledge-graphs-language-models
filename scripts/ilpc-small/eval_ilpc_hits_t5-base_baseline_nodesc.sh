@@ -29,12 +29,13 @@ echo $MODEL_CFG
 horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --validate_only \
         --task_name $TASK_NAME \
-        --train_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_train.csv \
-        --valid_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_valid.csv \
-        --test_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_test.csv \
+        --train_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_train.csv \
+        --valid_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_valid.csv \
+        --test_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_test.csv \
         --model_path /home/bulatov/bulatov/KGLM/runs/t5-base/ilpc-small/lr5e-06_constant_with_warmup_adamw_wd1e-02_512-512_bs128_iters100000_baseline_pretrained_2sep_enum_nodesc_eval/run_1/ \
         --cpt_path /home/bulatov/bulatov/KGLM/runs/t5-base/ilpc-small/lr5e-06_constant_with_warmup_adamw_wd1e-02_512-512_bs128_iters100000_baseline_pretrained_2sep_enum_nodesc/run_1 \
-        --index_path /home/bulatov/bulatov/KGLM/faiss/entities.index \
+        --index_path /home/bulatov/bulatov/KGLM/faiss/entities_small.index \
+        --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/small_verbalized_inference_entities.json \
         --from_pretrained $MODEL_CFG \
         --tokenizer $MODEL_NAME \
         --model_type $MODEL_TYPE \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CUDA_VISIBLE_DEVICES=1,2 NP=2 ./test_bert_sparse_pretrain_train_valid.sh
 set -e
-cd ../..
+cd ..
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -12,16 +12,16 @@ TASK_NAME=ilpc-small
 
 TGT_LEN=512
 
-METRIC=exact_match_entity
+METRIC=Hits@1
 
 
 for LR in 5e-06
 do
 
-for SCHEDULER in constant_with_warmup
+for SCHEDULER in linear
 do
 
-ITERS=50000
+ITERS=20000
 TBS=128
 BS=16
 MODEL_CFG="t5-base"
@@ -37,8 +37,9 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --train_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_train.csv \
         --valid_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_valid.csv \
         --test_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_test.csv \
-        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_pretrained_2sep_enum/run_$N \
+        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_pretrainedV2_2sep_enum/run_$N \
         --index_path "/home/bulatov/bulatov/KGLM/faiss/entities_description_small.index" \
+        --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/small_verbalized_inference_entities_and_descriptions.json \
         --tokenizer $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls transformers:T5ForConditionalGeneration \
@@ -50,7 +51,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
         --optimizer AdamW  --weight_decay 0.01 \
-        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps $(($ITERS/5)) \
+        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps $(($ITERS/10)) \
         --data_n_workers 2 \
         --log_interval $(($ITERS/200)) --valid_interval $(($ITERS/50)) \
         --show_valid_examples 10 \
@@ -65,6 +66,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --test_path /home/bulatov/bulatov/datasets/ilpc22/small_2sep_enum/small_test.csv \
         --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_pretrained_2sep_enum_nodesc/run_$N \
         --index_path "/home/bulatov/bulatov/KGLM/faiss/entities_small.index" \
+        --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/small_verbalized_inference_entities.json \
         --tokenizer $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls transformers:T5ForConditionalGeneration \
@@ -77,7 +79,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
         --optimizer AdamW  --weight_decay 0.01 \
-        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps $(($ITERS/5)) \
+        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps $(($ITERS/10)) \
         --data_n_workers 2 \
         --log_interval $(($ITERS/200)) --valid_interval $(($ITERS/50)) \
         --show_valid_examples 10 \

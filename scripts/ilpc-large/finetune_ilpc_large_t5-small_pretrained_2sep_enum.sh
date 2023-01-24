@@ -6,7 +6,7 @@ cd ../..
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
-MODEL_NAME=t5-base
+MODEL_NAME=t5-small
 MODEL_TYPE=encoder-decoder
 TASK_NAME=ilpc-large
 
@@ -14,10 +14,10 @@ TGT_LEN=512
 
 METRIC=Hits@1
 SCHEDULER=linear
-ITERS=20000
+ITERS=30000
 TBS=128
 BS=64
-MODEL_CFG="t5-base"
+MODEL_CFG="t5-small"
 
 for SRC_LEN in 512
 do
@@ -31,7 +31,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --train_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_train.csv \
         --valid_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_valid.csv \
         --test_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_test.csv \
-        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_baseline_pretrained_2sep_enum_nodesc/run_$N \
+        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_pretrained_2sep_enum_nodesc/run_$N \
         --index_path "./faiss/entities.index" \
         --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/large_verbalized_inference_entities.json \
         --from_pretrained $MODEL_CFG \
@@ -39,7 +39,6 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --model_type $MODEL_TYPE \
         --model_cls transformers:T5ForConditionalGeneration \
         --use_generate_on_valid \
-        --drop_neighborhood \
         --drop_description \
         --save_best \
         --input_seq_len $SRC_LEN \
@@ -60,7 +59,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --train_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_train.csv \
         --valid_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_valid.csv \
         --test_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_test.csv \
-        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_baseline_pretrained_2sep_enum/run_$N \
+        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_pretrained_2sep_enum/run_$N \
         --index_path "./faiss/entities_description.index" \
         --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/large_verbalized_inference_entities_and_descriptions.json \
         --from_pretrained $MODEL_CFG \
@@ -68,7 +67,6 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits.py \
         --model_type $MODEL_TYPE \
         --model_cls transformers:T5ForConditionalGeneration \
         --use_generate_on_valid \
-        --drop_neighborhood \
         --save_best \
         --input_seq_len $SRC_LEN \
         --target_seq_len $TGT_LEN \
