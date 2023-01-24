@@ -372,6 +372,13 @@ if __name__ == '__main__':
                 logger.info(f'hits: {hits}')
             for key in hits:
                 metrics[key] = hits[key]
+                
+            if args.inference_entities_path is not None:
+                hits_pipeline = hits_calculator.hits_pipeline(p, data['output_id'], p_entity, y_entity)
+                if hvd.rank() == 0:
+                    logger.info(f'hits_pipeline: {hits_pipeline}')
+                for key in hits_pipeline:
+                    metrics[f'{key}_pipeline'] = hits_pipeline[key]
 
         return metrics
 
