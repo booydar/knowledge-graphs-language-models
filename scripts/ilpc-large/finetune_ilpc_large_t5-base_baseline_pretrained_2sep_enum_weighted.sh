@@ -31,7 +31,7 @@ horovodrun --gloo -np $NP python run_finetuning_ilpc_hits_weighted_loss.py \
         --train_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_train.csv \
         --valid_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_valid.csv \
         --test_path /home/bulatov/bulatov/datasets/ilpc22/large_2sep_enum/large_test.csv \
-        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_baseline_pretrained_2sep_enum/run_$N \
+        --model_path ./runs/$MODEL_NAME/$TASK_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-02_${SRC_LEN}-${TGT_LEN}_bs${TBS}_iters${ITERS}_baseline_pretrained_2sep_enum_etw5/run_$N \
         --index_path "./faiss/entities_description.index" \
         --inference_entities_path /home/chepurova/knowledge-graphs-language-models/faiss/large_verbalized_inference_entities_and_descriptions.json \
         --from_pretrained $MODEL_CFG \
